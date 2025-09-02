@@ -1,0 +1,194 @@
+using System.Text.Json;
+using Datapac.Models;
+using Datapac.Requests;
+using Datapac.Responses;
+using Datapac.Utils;
+using Microsoft.EntityFrameworkCore;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+builder.Services.AddDbContext<LoansContext>();
+
+var app = builder.Build();
+
+app.UseSwagger();
+app.UseSwaggerUI();
+
+using (var scope = app.Services.CreateScope())
+{
+    var dbContext = scope.ServiceProvider.GetRequiredService<LoansContext>();
+    await dbContext.Database.EnsureCreatedAsync();
+    
+    if (!dbContext.Books.Any())
+    {
+        var bookJson = File.ReadAllText("Data/books_mock_data.json");
+        var userJson = File.ReadAllText("Data/users_mock_data.json");
+        var books = JsonSerializer.Deserialize<List<Book>>(bookJson);
+        var users = JsonSerializer.Deserialize<List<User>>(userJson);
+        if (books != null  && users != null)
+        {
+            dbContext.Users.AddRange(users);
+            dbContext.Books.AddRange(books);
+            await dbContext.SaveChangesAsync();
+        }
+    }
+}
+
+
+
+// BOOK
+var booksGroup = app.MapGroup("/books");
+
+booksGroup.MapGet("/", async (LoansContext context) => await context.Books.ToListAsync());
+
+booksGroup.MapGet("/{id}", async (int id, LoansContext context) => 
+{
+    var currentBook = await context.Books.FindAsync(id);
+    return currentBook == null ? Results.NotFound() : Results.Ok(currentBook);
+});
+
+booksGroup.MapPost("/", async (BookCreationRequest bookCreationRequest, LoansContext context) =>
+{
+    var errors = ValidationUtil.Validate(bookCreationRequest);
+    if (errors is not null) return Results.BadRequest(new { Message = "Validation failed", Errors = errors });
+    
+    var book = new Book
+    {
+        Author = bookCreationRequest.Author,
+        Title = bookCreationRequest.Title,
+        TotalCopies = bookCreationRequest.TotalCopies
+    };
+    book.Available = book.TotalCopies;
+    
+    context.Books.Add(book);
+    await context.SaveChangesAsync();
+    return Results.Created(booksGroup + $"/{book.Id}", book);
+});
+
+booksGroup.MapPut("/{id}", async (int id, BookUpdateRequest bookUpdateRequest, LoansContext context) =>
+{
+    var errors = ValidationUtil.Validate(bookUpdateRequest);
+    if (errors is not null) return Results.BadRequest(new { Message = "Validation failed", Errors = errors });
+    
+    var originalBook = await context.Books.FindAsync(id);
+    if (originalBook == null)
+    {
+        return Results.NotFound();
+    }
+
+    if (bookUpdateRequest.Title != null)
+        originalBook.Title = bookUpdateRequest.Title;
+
+    if (bookUpdateRequest.Author != null)
+        originalBook.Author = bookUpdateRequest.Author;
+
+    if (bookUpdateRequest.TotalCopies.HasValue)
+    {
+        originalBook.Available += (int)(bookUpdateRequest.TotalCopies - originalBook.TotalCopies);
+        originalBook.TotalCopies = bookUpdateRequest.TotalCopies.Value;
+        
+        if(originalBook.Available < 0)
+            return Results.Conflict(new { Message = "Cannot remove unreturned book copies."});
+    }
+    
+    await context.SaveChangesAsync();
+    return Results.NoContent();
+});
+
+booksGroup.MapDelete("/{id}", async (int id, LoansContext context) =>
+{
+    var originalBook = await context.Books.FindAsync(id);
+
+    if (originalBook == null)
+    {
+        return Results.NotFound();
+    }
+
+    context.Books.Remove(originalBook);
+    await context.SaveChangesAsync();
+    return Results.NoContent();
+});
+
+
+
+// USER
+var usersGroup = app.MapGroup("/users");
+    
+usersGroup.MapGet("/", async (LoansContext context) => await context.Users.ToListAsync());
+
+
+
+// LOAN
+var loansGroup = app.MapGroup("/loans");
+
+loansGroup.MapGet("/", async (LoansContext context) => await context.Loans.ToListAsync());
+
+loansGroup.MapPost("/", async (LoanCreationRequest loanCreationRequest, LoansContext context) =>
+{
+    var user = await context.Users.FindAsync(loanCreationRequest.UserId);
+    if (user == null)
+        return Results.NotFound(new { message = "User not found" });
+
+    var book = await context.Books.FindAsync(loanCreationRequest.BookId);
+    if (book == null)
+        return Results.NotFound(new { message = "Book not found" });
+
+    if(book.Available <= 0)
+        return Results.Conflict(new { message = "No available copies for the book." });
+    
+    var loan = new Loan
+    {
+        BookId = loanCreationRequest.BookId,
+        UserId = loanCreationRequest.UserId,
+        StartDate = DateOnly.FromDateTime(DateTime.Now),
+        ExpirationDate = DateOnly.FromDateTime(DateTime.Now).AddMonths(1),
+        ReturnDate = null
+    };
+
+    book.Available -= 1;
+
+    context.Loans.Add(loan);
+    await context.SaveChangesAsync();
+    return Results.Created($"/{loan.Id}", loan);
+});
+
+loansGroup.MapPut("/{id}/return", async (int id, LoansContext context) =>
+{
+    var originalLoan = await context.Loans.FindAsync(id);
+    if (originalLoan == null)
+    {
+        return Results.NotFound();
+    }
+    
+    if(originalLoan.ReturnDate.HasValue)
+        return Results.Conflict(new { Message = "Loan already returned." });
+    
+    originalLoan.ReturnDate = DateOnly.FromDateTime(DateTime.Now);
+    
+    var book = await context.Books.FindAsync(originalLoan.BookId);
+    if (book == null)
+        return Results.NotFound(new { message = "Loaned book not found" });
+
+    book.Available += 1;
+
+    var user = await context.Users.FindAsync(originalLoan.UserId);
+    if (user == null)
+        return Results.NotFound(new { message = "User not found" });
+    
+    var confirmation = new Responses.LoanReturnResponse(
+        LoanId: id,
+        BookId: originalLoan.BookId,
+        ReturnDate: originalLoan.ReturnDate,
+        UserId:  originalLoan.UserId,
+        BookTitle: book.Title,
+        UserName: user.Name,
+        UserEmail: user.Email
+        );
+        
+    await context.SaveChangesAsync();
+    return Results.Ok(confirmation);
+});
+
+app.Run();
