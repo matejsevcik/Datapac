@@ -1,3 +1,25 @@
-This project is a minimal API for simulating a library management system. 
+# Library Management  API
 
-Branch "bonus" contains an overall improved version of the project with bonus tasks completed, but it was created after the agreed deadline for submission.
+This project is a minimal API for simulating a simple library management system.  
+
+> **Note:** The `bonus` branch contains an enhanced version of the project with additional tasks completed. It was created after the official submission deadline.
+
+## Prerequisites
+
+- [.NET SDK 8.0](https://dotnet.microsoft.com/en-us/download) needs to be installed on your system.
+
+## Running the API
+
+1. Clone or download this repository.
+2. Open a terminal or command prompt and navigate to the repository folder.
+3. Run the project using:
+
+```bash
+dotnet run
+```
+
+4. Open your browser and navigate to: 
+```
+http://localhost:5009/swagger
+```
+This will open the Swagger UI, where you can explore and test the API endpoints.
