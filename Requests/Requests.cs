@@ -27,7 +27,31 @@ namespace Datapac.Requests
         public int? TotalCopies { get; set; }
     }
 
-    public record LoanCreationRequest(
-        int BookId,
-        int UserId);
+    // public record LoanCreationRequest(
+    //     int BookId,
+    //     int UserId,
+    //     DateOnly? ExpirationDate
+    //     );
+    
+    public class LoanCreationRequest : IValidatableObject
+    {
+        public int BookId { get; set; }
+        public int UserId { get; set; }
+        public DateOnly? ExpirationDate { get; set; }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (ExpirationDate.HasValue)
+            {
+                var minDate = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(1));
+
+                if (ExpirationDate.Value < minDate)
+                {
+                    yield return new ValidationResult(
+                        "ExpirationDate must be tomorrow or later",
+                        new[] { nameof(ExpirationDate) });
+                }
+            }
+        }
+    }
 }

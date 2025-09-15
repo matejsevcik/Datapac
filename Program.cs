@@ -3,9 +3,13 @@ using Datapac.Models;
 using Datapac.Requests;
 using Datapac.Responses;
 using Datapac.Utils;
+using Datapac.Utils.Notifications;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddSingleton<MockEmailService>();
+builder.Services.AddHostedService<ReminderService>();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -166,6 +170,9 @@ loansGroup.MapGet("/", async (LoansContext context) =>
 
 loansGroup.MapPost("/", async (LoanCreationRequest loanCreationRequest, LoansContext context) =>
 {
+    var errors = ValidationUtil.Validate(loanCreationRequest);
+    if (errors is not null) return Results.BadRequest(new { Message = "Validation failed", Errors = errors });
+    
     var user = await context.Users.FindAsync(loanCreationRequest.UserId);
     if (user == null)
         return Results.NotFound(new { message = "User not found" });
@@ -182,7 +189,7 @@ loansGroup.MapPost("/", async (LoanCreationRequest loanCreationRequest, LoansCon
         Book = book,
         User =  user,
         StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
-        ExpirationDate = DateOnly.FromDateTime(DateTime.UtcNow).AddMonths(1),
+        ExpirationDate = loanCreationRequest.ExpirationDate ?? DateOnly.FromDateTime(DateTime.UtcNow).AddMonths(1),
         ReturnDate = null
     };
 
