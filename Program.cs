@@ -9,6 +9,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddSingleton<SoftDeleteInterceptor>();
+
 builder.Services.AddDbContext<LoansContext>();
 
 var app = builder.Build();
@@ -41,11 +44,14 @@ using (var scope = app.Services.CreateScope())
 // BOOK
 var booksGroup = app.MapGroup("/books");
 
-booksGroup.MapGet("/", async (LoansContext context) => await context.Books.ToListAsync());
+booksGroup.MapGet("/", async (LoansContext context) => await context.Books
+    .ToListAsync());
 
 booksGroup.MapGet("/{id}", async (int id, LoansContext context) => 
 {
-    var currentBook = await context.Books.FindAsync(id);
+    var currentBook = await context.Books
+        .IgnoreQueryFilters()
+        .FirstOrDefaultAsync(b => b.Id == id);
     return currentBook == null ? Results.NotFound() : Results.Ok(currentBook);
 });
 
@@ -105,8 +111,17 @@ booksGroup.MapDelete("/{id}", async (int id, LoansContext context) =>
     {
         return Results.NotFound();
     }
+    
+    var hasActiveLoans = await context.Loans.AnyAsync(
+        l => l.Book.Id == id && l.ReturnDate == null);
+
+    if (hasActiveLoans)
+    {
+        return Results.Conflict(new { Message = "Book has an active loan, it cannot be deleted." });
+    }
 
     context.Books.Remove(originalBook);
+    
     await context.SaveChangesAsync();
     return Results.NoContent();
 });
@@ -123,7 +138,31 @@ usersGroup.MapGet("/", async (LoansContext context) => await context.Users.ToLis
 // LOAN
 var loansGroup = app.MapGroup("/loans");
 
-loansGroup.MapGet("/", async (LoansContext context) => await context.Loans.ToListAsync());
+loansGroup.MapGet("/", async (LoansContext context) =>
+{
+    var allLoans = await context.Loans
+        .Include(l => l.Book)
+        .Include(l => l.User)
+        .IgnoreQueryFilters()
+        .ToListAsync();
+    var response = new List<Responses.LoanDetailResponse>();
+    
+    foreach (var loan in allLoans)
+    {
+        response.Add(new Responses.LoanDetailResponse(
+            LoanId:  loan.Id,
+            UserId: loan.User.Id,
+            BookId: loan.Book.Id,
+            UserEmail: loan.User.Email,
+            BookTitle: loan.Book.Title,
+            StartDate:  loan.StartDate,
+            ExpirationDate: loan.ExpirationDate,
+            ReturnDate: loan.ReturnDate
+            ));
+    }
+    
+    return Results.Ok(response);
+});
 
 loansGroup.MapPost("/", async (LoanCreationRequest loanCreationRequest, LoansContext context) =>
 {
@@ -179,7 +218,9 @@ loansGroup.MapPut("/{id}/return", async (int id, LoansContext context) =>
         UserId:  originalLoan.User.Id,
         BookTitle: originalLoan.Book.Title,
         UserName: originalLoan.User.Name,
-        UserEmail: originalLoan.User.Email
+        UserEmail: originalLoan.User.Email,
+        StartDate:  originalLoan.StartDate,
+        ExpirationDate: originalLoan.ExpirationDate
         );
         
     await context.SaveChangesAsync();
