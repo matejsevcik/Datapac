@@ -136,14 +136,14 @@ loansGroup.MapPost("/", async (LoanCreationRequest loanCreationRequest, LoansCon
         return Results.NotFound(new { message = "Book not found" });
 
     if(book.Available <= 0)
-        return Results.Conflict(new { message = "No available copies for the book." });
+        return Results.Conflict(new { message = "No available copies of the book." });
     
     var loan = new Loan
     {
-        BookId = loanCreationRequest.BookId,
-        UserId = loanCreationRequest.UserId,
-        StartDate = DateOnly.FromDateTime(DateTime.Now),
-        ExpirationDate = DateOnly.FromDateTime(DateTime.Now).AddMonths(1),
+        Book = book,
+        User =  user,
+        StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+        ExpirationDate = DateOnly.FromDateTime(DateTime.UtcNow).AddMonths(1),
         ReturnDate = null
     };
 
@@ -156,7 +156,11 @@ loansGroup.MapPost("/", async (LoanCreationRequest loanCreationRequest, LoansCon
 
 loansGroup.MapPut("/{id}/return", async (int id, LoansContext context) =>
 {
-    var originalLoan = await context.Loans.FindAsync(id);
+    var originalLoan = await context.Loans
+        .Include(l => l.Book)
+        .Include(l => l.User)
+        .FirstOrDefaultAsync(l => l.Id == id);
+    
     if (originalLoan == null)
     {
         return Results.NotFound();
@@ -165,26 +169,17 @@ loansGroup.MapPut("/{id}/return", async (int id, LoansContext context) =>
     if(originalLoan.ReturnDate.HasValue)
         return Results.Conflict(new { Message = "Loan already returned." });
     
-    originalLoan.ReturnDate = DateOnly.FromDateTime(DateTime.Now);
-    
-    var book = await context.Books.FindAsync(originalLoan.BookId);
-    if (book == null)
-        return Results.NotFound(new { message = "Loaned book not found" });
-
-    book.Available += 1;
-
-    var user = await context.Users.FindAsync(originalLoan.UserId);
-    if (user == null)
-        return Results.NotFound(new { message = "User not found" });
+    originalLoan.ReturnDate = DateOnly.FromDateTime(DateTime.UtcNow);
+    originalLoan.Book.Available += 1;
     
     var confirmation = new Responses.LoanReturnResponse(
         LoanId: id,
-        BookId: originalLoan.BookId,
+        BookId: originalLoan.Book.Id,
         ReturnDate: originalLoan.ReturnDate,
-        UserId:  originalLoan.UserId,
-        BookTitle: book.Title,
-        UserName: user.Name,
-        UserEmail: user.Email
+        UserId:  originalLoan.User.Id,
+        BookTitle: originalLoan.Book.Title,
+        UserName: originalLoan.User.Name,
+        UserEmail: originalLoan.User.Email
         );
         
     await context.SaveChangesAsync();
